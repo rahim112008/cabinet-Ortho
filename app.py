@@ -5,13 +5,17 @@ import os
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance, ImageOps
 import io
-import json
-import subprocess
 import shutil
-import tempfile
 import zipfile
+import base64
 from datetime import date, timedelta, datetime
 import calendar
+from docx import Document
+from docx.shared import Pt, RGBColor, Cm, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 # ============================================================
 # CONFIGURATION
@@ -26,181 +30,6 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB_PATH    = os.path.join(BASE_DIR, "data", "cabinet.db")
 RADIO_DIR  = os.path.join(BASE_DIR, "data", "radios")
 EXPORT_DIR = os.path.join(BASE_DIR, "data", "exports")
-JS_SCRIPT  = os.path.join(BASE_DIR, "gen_ordonnance.js")
-
-# ── Script JS embarqué (généré automatiquement au démarrage) ──────
-JS_CODE = r"""
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-        AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign } = require('docx');
-const fs = require('fs');
-const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const COL = { bleu:"1a3a5c", bleu_clair:"dbeafe", gris:"f3f4f6" };
-const bn = { style:BorderStyle.NONE, size:0, color:"FFFFFF" };
-const no_b = { top:bn, bottom:bn, left:bn, right:bn };
-const h = data.entete;
-const enteteTable = new Table({
-  width:{ size:9360, type:WidthType.DXA }, columnWidths:[6000,3360],
-  borders:{ top:bn, bottom:bn, left:bn, right:bn, insideH:bn, insideV:bn },
-  rows:[new TableRow({ children:[
-    new TableCell({ width:{size:6000,type:WidthType.DXA}, borders:no_b,
-      margins:{top:80,bottom:80,left:0,right:120},
-      children:[
-        new Paragraph({ children:[new TextRun({text:h.nom_medecin||"Dr. Nom Prénom",bold:true,size:30,color:COL.bleu,font:"Arial"})]}),
-        new Paragraph({ children:[new TextRun({text:h.specialite||"",size:22,color:"374151",font:"Arial"})]}),
-        new Paragraph({ children:[new TextRun({text:h.diplomes||"",size:18,color:"6b7280",italics:true,font:"Arial"})]}),
-      ]}),
-    new TableCell({ width:{size:3360,type:WidthType.DXA}, borders:no_b,
-      margins:{top:80,bottom:80,left:120,right:0}, verticalAlign:VerticalAlign.CENTER,
-      shading:{fill:COL.bleu,type:ShadingType.CLEAR},
-      children:[
-        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:h.cabinet||"Cabinet Médical",bold:true,size:22,color:"FFFFFF",font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:h.adresse||"",size:18,color:"FFFFFF",font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:h.telephone?"Tel: "+h.telephone:"",size:18,color:"FFFFFF",font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:h.email||"",size:18,color:"FFFFFF",font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER, children:[new TextRun({text:h.horaires||"",size:16,color:"FFFFFF",font:"Arial"})]}),
-      ]}),
-  ]})]
-});
-const sep1 = new Paragraph({
-  border:{bottom:{style:BorderStyle.SINGLE,size:12,color:COL.bleu,space:1}},
-  children:[new TextRun({text:"",font:"Arial"})], spacing:{after:200}
-});
-const p = data.patient;
-const patientTable = new Table({
-  width:{size:9360,type:WidthType.DXA}, columnWidths:[5500,3860],
-  borders:{top:bn,bottom:bn,left:bn,right:bn,insideH:bn,insideV:bn},
-  rows:[new TableRow({ children:[
-    new TableCell({ width:{size:5500,type:WidthType.DXA}, borders:no_b,
-      shading:{fill:COL.gris,type:ShadingType.CLEAR},
-      margins:{top:100,bottom:100,left:150,right:120},
-      children:[
-        new Paragraph({children:[
-          new TextRun({text:"PATIENT : ",bold:true,size:22,color:COL.bleu,font:"Arial"}),
-          new TextRun({text:(p.prenom||"")+" "+(p.nom||""),bold:true,size:22,font:"Arial"})
-        ]}),
-        new Paragraph({children:[
-          new TextRun({text:"Ne(e) le : ",size:20,color:"6b7280",font:"Arial"}),
-          new TextRun({text:p.date_naissance||"-",size:20,font:"Arial"}),
-          new TextRun({text:"   Age : ",size:20,color:"6b7280",font:"Arial"}),
-          new TextRun({text:p.age?p.age+" ans":"-",size:20,font:"Arial"}),
-        ]}),
-        p.mutuelle?new Paragraph({children:[
-          new TextRun({text:"Mutuelle : ",size:20,color:"6b7280",font:"Arial"}),
-          new TextRun({text:p.mutuelle,size:20,font:"Arial"})
-        ]}):new Paragraph({children:[new TextRun("")]}),
-        p.allergies?new Paragraph({children:[
-          new TextRun({text:"ALLERGIES : ",size:20,bold:true,color:"dc2626",font:"Arial"}),
-          new TextRun({text:p.allergies,size:20,color:"dc2626",font:"Arial"})
-        ]}):new Paragraph({children:[new TextRun("")]}),
-      ]}),
-    new TableCell({ width:{size:3860,type:WidthType.DXA}, borders:no_b,
-      margins:{top:100,bottom:100,left:120,right:0}, verticalAlign:VerticalAlign.CENTER,
-      children:[
-        new Paragraph({alignment:AlignmentType.RIGHT,
-          children:[new TextRun({text:"Le : "+(data.date||""),bold:true,size:22,font:"Arial"})]}),
-        data.diagnostic?new Paragraph({alignment:AlignmentType.RIGHT,
-          children:[new TextRun({text:"Diag : "+data.diagnostic,size:20,italics:true,color:"374151",font:"Arial"})]}):
-          new Paragraph({children:[new TextRun("")]}),
-      ]}),
-  ]})]
-});
-const titreOrdo = new Paragraph({
-  alignment:AlignmentType.CENTER, spacing:{before:300,after:200},
-  children:[new TextRun({text:"ORDONNANCE MEDICALE",bold:true,size:30,color:COL.bleu,font:"Arial",allCaps:true})]
-});
-const sep2 = new Paragraph({
-  border:{bottom:{style:BorderStyle.SINGLE,size:4,color:COL.bleu_clair,space:1}},
-  children:[new TextRun("")], spacing:{after:250}
-});
-const medParas = [];
-(data.medicaments||[]).forEach((med,idx)=>{
-  medParas.push(new Paragraph({ spacing:{before:180,after:60}, children:[
-    new TextRun({text:`${idx+1}. `,bold:true,size:24,color:COL.bleu,font:"Arial"}),
-    new TextRun({text:med.nom,bold:true,size:24,font:"Arial"}),
-    med.dci?new TextRun({text:`  (${med.dci})`,size:20,italics:true,color:"6b7280",font:"Arial"}):new TextRun(""),
-  ]}));
-  medParas.push(new Paragraph({ indent:{left:500}, spacing:{before:40,after:40}, children:[
-    new TextRun({text:"Posologie : ",bold:true,size:20,color:"374151",font:"Arial"}),
-    new TextRun({text:med.posologie||"-",size:20,font:"Arial"}),
-  ]}));
-  medParas.push(new Paragraph({ indent:{left:500}, spacing:{before:40,after:40}, children:[
-    new TextRun({text:"Duree : ",bold:true,size:20,color:"374151",font:"Arial"}),
-    new TextRun({text:med.duree||"-",size:20,font:"Arial"}),
-  ]}));
-  if(med.instructions) medParas.push(new Paragraph({ indent:{left:500}, spacing:{before:40,after:80}, children:[
-    new TextRun({text:"! ",size:20,font:"Arial"}),
-    new TextRun({text:med.instructions,size:20,italics:true,color:"92400e",font:"Arial"}),
-  ]}));
-  if(idx<(data.medicaments.length-1)) medParas.push(new Paragraph({
-    border:{bottom:{style:BorderStyle.DASHED,size:4,color:"e5e7eb",space:1}},
-    children:[new TextRun("")], spacing:{after:100}
-  }));
-});
-const instrParas=[];
-if(data.instructions_generales){
-  instrParas.push(new Paragraph({ spacing:{before:300,after:100},
-    border:{top:{style:BorderStyle.SINGLE,size:4,color:COL.bleu_clair,space:1}},
-    children:[new TextRun({text:"Instructions generales :",bold:true,size:20,color:COL.bleu,font:"Arial"})]}));
-  instrParas.push(new Paragraph({ indent:{left:300}, spacing:{after:200},
-    children:[new TextRun({text:data.instructions_generales,size:20,italics:true,font:"Arial"})]}));
-}
-const sigTable = new Table({
-  width:{size:9360,type:WidthType.DXA}, columnWidths:[5000,4360],
-  borders:{top:bn,bottom:bn,left:bn,right:bn,insideH:bn,insideV:bn},
-  rows:[new TableRow({ children:[
-    new TableCell({ width:{size:5000,type:WidthType.DXA}, borders:no_b,
-      margins:{top:200,bottom:100,left:0,right:120}, children:[
-        data.prochain_rdv?new Paragraph({children:[
-          new TextRun({text:"Prochain RDV : ",bold:true,size:20,color:COL.bleu,font:"Arial"}),
-          new TextRun({text:data.prochain_rdv,size:20,font:"Arial"}),
-        ]}):new Paragraph({children:[new TextRun("")]}),
-        data.arret_travail?new Paragraph({children:[
-          new TextRun({text:"Arret de travail : ",bold:true,size:20,color:"dc2626",font:"Arial"}),
-          new TextRun({text:data.arret_travail,size:20,color:"dc2626",font:"Arial"}),
-        ]}):new Paragraph({children:[new TextRun("")]}),
-      ]}),
-    new TableCell({ width:{size:4360,type:WidthType.DXA}, borders:no_b,
-      margins:{top:200,bottom:100,left:120,right:0}, children:[
-        new Paragraph({alignment:AlignmentType.CENTER,
-          children:[new TextRun({text:h.nom_medecin||"Signature",bold:true,size:20,color:COL.bleu,font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER,
-          children:[new TextRun({text:h.specialite||"",size:18,italics:true,color:"6b7280",font:"Arial"})]}),
-        new Paragraph({alignment:AlignmentType.CENTER, spacing:{before:600},
-          border:{top:{style:BorderStyle.SINGLE,size:4,color:"374151",space:1}},
-          children:[new TextRun({text:"Cachet & Signature",size:18,color:"9ca3af",font:"Arial"})]}),
-      ]}),
-  ]})]
-});
-const pied = new Paragraph({
-  alignment:AlignmentType.CENTER, spacing:{before:300},
-  border:{top:{style:BorderStyle.SINGLE,size:4,color:COL.bleu_clair,space:1}},
-  children:[new TextRun({text:(h.cabinet||"Cabinet")+
-    (h.adresse?"  |  "+h.adresse:"")+
-    (h.telephone?"  |  "+h.telephone:"")+
-    (h.horaires?"  |  "+h.horaires:""),
-    size:16,color:"9ca3af",font:"Arial"})]
-});
-const doc = new Document({ sections:[{ properties:{ page:{
-  size:{width:11906,height:16838}, margin:{top:1000,right:1000,bottom:1000,left:1000}
-}}, children:[
-  enteteTable, sep1,
-  new Paragraph({spacing:{after:160},children:[new TextRun("")]}),
-  patientTable, titreOrdo, sep2,
-  ...medParas, ...instrParas,
-  new Paragraph({spacing:{before:200},children:[new TextRun("")]}),
-  sigTable, pied,
-]}]});
-Packer.toBuffer(doc).then(buf=>{
-  fs.writeFileSync(process.argv[3],buf); console.log("OK");
-}).catch(e=>{ console.error(e.message); process.exit(1); });
-"""
-
-def ensure_js_script():
-    """Écrit le script JS sur disque s'il n'existe pas encore"""
-    if not os.path.exists(JS_SCRIPT):
-        with open(JS_SCRIPT, 'w', encoding='utf-8') as f:
-            f.write(JS_CODE.strip())
-
 
 for d in [os.path.join(BASE_DIR,"data"), RADIO_DIR, EXPORT_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -376,7 +205,6 @@ def init_db():
         ]
         c.executemany("INSERT INTO medicaments (nom,dci,classe,forme,dosage,posologie_adulte,posologie_enfant,contre_indications,effets_indesirables,prix,stock) VALUES (?,?,?,?,?,?,?,?,?,?,?)", meds)
     conn.commit(); conn.close()
-    ensure_js_script()
 
 # ============================================================
 # UTILITAIRES
@@ -394,45 +222,245 @@ def calc_age(dob_str):
         return str((date.today() - dob.date()).days // 365)
     except: return ""
 
+def set_cell_bg(cell, hex_color):
+    """Couleur de fond d'une cellule tableau"""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), hex_color)
+    tcPr.append(shd)
+
+def set_cell_borders(cell, top=None, bottom=None, left=None, right=None):
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcBorders = OxmlElement('w:tcBorders')
+    for side, val in [('top',top),('bottom',bottom),('left',left),('right',right)]:
+        el = OxmlElement(f'w:{side}')
+        if val is None:
+            el.set(qn('w:val'), 'nil')
+        else:
+            el.set(qn('w:val'), val.get('val','single'))
+            el.set(qn('w:sz'), str(val.get('sz', 4)))
+            el.set(qn('w:color'), val.get('color', '000000'))
+        tcBorders.append(el)
+    tcPr.append(tcBorders)
+
+def add_run(para, text, bold=False, italic=False, size=11, color=None, font="Arial"):
+    run = para.add_run(text)
+    run.bold = bold
+    run.italic = italic
+    run.font.name = font
+    run.font.size = Pt(size)
+    if color:
+        r, g, b = int(color[0:2],16), int(color[2:4],16), int(color[4:6],16)
+        run.font.color.rgb = RGBColor(r, g, b)
+    return run
+
 def gen_ordonnance_docx(patient, meds_list, date_ordo, diagnostic="",
                          instructions_gen="", prochain_rdv="", arret_travail=""):
-    """Génère un fichier DOCX professionnel et retourne les bytes"""
-    entete = get_entete()
-    data = {
-        "entete": entete,
-        "patient": {
-            "nom": patient.get("nom",""),
-            "prenom": patient.get("prenom",""),
-            "date_naissance": patient.get("date_naissance",""),
-            "age": calc_age(patient.get("date_naissance","")),
-            "mutuelle": patient.get("mutuelle",""),
-            "allergies": patient.get("allergies",""),
-        },
-        "date": date_ordo,
-        "diagnostic": diagnostic,
-        "medicaments": meds_list,
-        "instructions_generales": instructions_gen,
-        "prochain_rdv": prochain_rdv,
-        "arret_travail": arret_travail,
-    }
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as jf:
-        json.dump(data, jf, ensure_ascii=False); jf_path = jf.name
-    out_path = jf_path.replace('.json', '.docx')
+    """Génère un DOCX professionnel avec python-docx — aucune dépendance Node.js"""
     try:
-        result = subprocess.run(
-            ["node", JS_SCRIPT, jf_path, out_path],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            return None, result.stderr
-        with open(out_path, 'rb') as f:
-            docx_bytes = f.read()
-        return docx_bytes, None
+        entete = get_entete()
+        doc = Document()
+
+        # ── Marges de page ─────────────────────────────────────
+        for section in doc.sections:
+            section.top_margin    = Cm(1.5)
+            section.bottom_margin = Cm(1.5)
+            section.left_margin   = Cm(2.0)
+            section.right_margin  = Cm(2.0)
+
+        BLEU     = "1a3a5c"
+        GRIS     = "f3f4f6"
+        BLEU_CL  = "dbeafe"
+        ROUGE    = "dc2626"
+        ORANGE   = "92400e"
+        GRIS_TEX = "6b7280"
+
+        # ── EN-TÊTE : tableau 2 colonnes ───────────────────────
+        t_header = doc.add_table(rows=1, cols=2)
+        t_header.style = 'Table Grid'
+        w_left  = t_header.cell(0,0)
+        w_right = t_header.cell(0,1)
+        # Largeurs
+        w_left._tc.get_or_add_tcPr().append(
+            OxmlElement('w:tcW'))
+        for cell, w_twips in [(w_left, 5400), (w_right, 3400)]:
+            tcW = cell._tc.get_or_add_tcPr().find(qn('w:tcW'))
+            if tcW is None:
+                tcW = OxmlElement('w:tcW'); cell._tc.get_or_add_tcPr().append(tcW)
+            tcW.set(qn('w:w'), str(w_twips)); tcW.set(qn('w:type'), 'dxa')
+
+        # Cellule gauche — infos médecin
+        set_cell_borders(w_left)
+        set_cell_borders(w_right)
+        set_cell_bg(w_right, BLEU)
+
+        p = w_left.paragraphs[0]
+        add_run(p, entete.get('nom_medecin','Dr. Nom Prénom'), bold=True, size=14, color=BLEU)
+        p2 = w_left.add_paragraph()
+        add_run(p2, entete.get('specialite',''), size=11, color="374151")
+        p3 = w_left.add_paragraph()
+        add_run(p3, entete.get('diplomes',''), size=9, italic=True, color=GRIS_TEX)
+
+        # Cellule droite — infos cabinet (fond bleu, texte blanc)
+        pr = w_right.paragraphs[0]
+        pr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        add_run(pr, entete.get('cabinet','Cabinet Médical'), bold=True, size=11, color="FFFFFF")
+        for txt in [entete.get('adresse',''), 
+                    ('Tél: '+entete.get('telephone','')) if entete.get('telephone') else '',
+                    entete.get('email',''),
+                    entete.get('horaires','')]:
+            if txt:
+                pp = w_right.add_paragraph(); pp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                add_run(pp, txt, size=9, color="FFFFFF")
+
+        # Ligne séparatrice bleue
+        doc.add_paragraph()
+        sep = doc.add_paragraph()
+        pPr = sep._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single'); bottom.set(qn('w:sz'), '12')
+        bottom.set(qn('w:color'), BLEU); pBdr.append(bottom); pPr.append(pBdr)
+
+        # ── PATIENT + DATE : tableau 2 colonnes ────────────────
+        t_pat = doc.add_table(rows=1, cols=2)
+        t_pat.style = 'Table Grid'
+        c_pat  = t_pat.cell(0,0)
+        c_date = t_pat.cell(0,1)
+        set_cell_borders(c_pat); set_cell_borders(c_date)
+        set_cell_bg(c_pat, GRIS)
+
+        pat_nom = f"{patient.get('prenom','')} {patient.get('nom','')}"
+        age_str = calc_age(patient.get('date_naissance',''))
+
+        pp = c_pat.paragraphs[0]
+        add_run(pp, "PATIENT : ", bold=True, size=11, color=BLEU)
+        add_run(pp, pat_nom, bold=True, size=11)
+        pp2 = c_pat.add_paragraph()
+        add_run(pp2, "Né(e) le : ", size=10, color=GRIS_TEX)
+        add_run(pp2, (patient.get('date_naissance','') or '—') + f"   Âge : {age_str} ans" if age_str else (patient.get('date_naissance','') or '—'), size=10)
+        if patient.get('mutuelle'):
+            pm = c_pat.add_paragraph()
+            add_run(pm, "Mutuelle : ", size=10, color=GRIS_TEX)
+            add_run(pm, patient.get('mutuelle',''), size=10)
+        if patient.get('allergies'):
+            pa = c_pat.add_paragraph()
+            add_run(pa, "⚠ ALLERGIES : ", bold=True, size=10, color=ROUGE)
+            add_run(pa, patient.get('allergies',''), size=10, color=ROUGE)
+
+        pd = c_date.paragraphs[0]; pd.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        add_run(pd, f"Le : {date_ordo}", bold=True, size=11)
+        if diagnostic:
+            pd2 = c_date.add_paragraph(); pd2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            add_run(pd2, f"Diag. : {diagnostic}", italic=True, size=9, color="374151")
+
+        # ── TITRE ──────────────────────────────────────────────
+        doc.add_paragraph()
+        titre = doc.add_paragraph()
+        titre.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        add_run(titre, "ORDONNANCE MÉDICALE", bold=True, size=14, color=BLEU)
+
+        sep2 = doc.add_paragraph()
+        pPr2 = sep2._p.get_or_add_pPr()
+        pBdr2 = OxmlElement('w:pBdr')
+        bot2 = OxmlElement('w:bottom')
+        bot2.set(qn('w:val'), 'single'); bot2.set(qn('w:sz'), '4')
+        bot2.set(qn('w:color'), BLEU_CL); pBdr2.append(bot2); pPr2.append(pBdr2)
+        doc.add_paragraph()
+
+        # ── MÉDICAMENTS ────────────────────────────────────────
+        for i, med in enumerate(meds_list):
+            # Numéro + Nom
+            pm = doc.add_paragraph()
+            add_run(pm, f"{i+1}.  ", bold=True, size=12, color=BLEU)
+            add_run(pm, med.get('nom',''), bold=True, size=12)
+            if med.get('dci'):
+                add_run(pm, f"  ({med['dci']})", italic=True, size=10, color=GRIS_TEX)
+            # Posologie
+            pp_pos = doc.add_paragraph(); pp_pos.paragraph_format.left_indent = Cm(1)
+            add_run(pp_pos, "Posologie : ", bold=True, size=10, color="374151")
+            add_run(pp_pos, med.get('posologie','—'), size=10)
+            # Durée
+            pp_dur = doc.add_paragraph(); pp_dur.paragraph_format.left_indent = Cm(1)
+            add_run(pp_dur, "Durée : ", bold=True, size=10, color="374151")
+            add_run(pp_dur, med.get('duree','—'), size=10)
+            # Instructions
+            if med.get('instructions'):
+                pp_inst = doc.add_paragraph(); pp_inst.paragraph_format.left_indent = Cm(1)
+                add_run(pp_inst, "⚠ ", size=10)
+                add_run(pp_inst, med['instructions'], italic=True, size=10, color=ORANGE)
+            # Séparateur entre médicaments
+            if i < len(meds_list) - 1:
+                sep_m = doc.add_paragraph()
+                pPrm = sep_m._p.get_or_add_pPr()
+                pBdrm = OxmlElement('w:pBdr')
+                botm = OxmlElement('w:bottom')
+                botm.set(qn('w:val'), 'dashed'); botm.set(qn('w:sz'), '4')
+                botm.set(qn('w:color'), 'e5e7eb'); pBdrm.append(botm); pPrm.append(pBdrm)
+
+        # ── INSTRUCTIONS GÉNÉRALES ──────────────────────────────
+        if instructions_gen:
+            doc.add_paragraph()
+            pi = doc.add_paragraph()
+            add_run(pi, "Instructions générales : ", bold=True, size=10, color=BLEU)
+            add_run(pi, instructions_gen, italic=True, size=10)
+
+        # ── SIGNATURE + RDV ────────────────────────────────────
+        doc.add_paragraph(); doc.add_paragraph()
+        t_sig = doc.add_table(rows=1, cols=2)
+        t_sig.style = 'Table Grid'
+        c_rdv = t_sig.cell(0,0); c_sign = t_sig.cell(0,1)
+        set_cell_borders(c_rdv); set_cell_borders(c_sign)
+
+        if prochain_rdv:
+            pr_p = c_rdv.paragraphs[0]
+            add_run(pr_p, "Prochain RDV : ", bold=True, size=10, color=BLEU)
+            add_run(pr_p, prochain_rdv, size=10)
+        if arret_travail:
+            pa_p = c_rdv.add_paragraph()
+            add_run(pa_p, "Arrêt de travail : ", bold=True, size=10, color=ROUGE)
+            add_run(pa_p, arret_travail, size=10, color=ROUGE)
+
+        ps = c_sign.paragraphs[0]; ps.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        add_run(ps, entete.get('nom_medecin',''), bold=True, size=10, color=BLEU)
+        ps2 = c_sign.add_paragraph(); ps2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        add_run(ps2, entete.get('specialite',''), italic=True, size=9, color=GRIS_TEX)
+        # Espace signature
+        for _ in range(4): c_sign.add_paragraph()
+        ps_final = c_sign.add_paragraph(); ps_final.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pPr_sig = ps_final._p.get_or_add_pPr()
+        pBdr_sig = OxmlElement('w:pBdr')
+        top_sig = OxmlElement('w:top')
+        top_sig.set(qn('w:val'), 'single'); top_sig.set(qn('w:sz'), '4')
+        top_sig.set(qn('w:color'), '374151'); pBdr_sig.append(top_sig); pPr_sig.append(pBdr_sig)
+        add_run(ps_final, "Cachet & Signature", size=9, color="9ca3af")
+
+        # ── PIED DE PAGE ───────────────────────────────────────
+        doc.add_paragraph()
+        pied = doc.add_paragraph()
+        pied.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pPr_p = pied._p.get_or_add_pPr()
+        pBdr_p = OxmlElement('w:pBdr')
+        top_p = OxmlElement('w:top')
+        top_p.set(qn('w:val'), 'single'); top_p.set(qn('w:sz'), '4')
+        top_p.set(qn('w:color'), BLEU_CL); pBdr_p.append(top_p); pPr_p.append(pBdr_p)
+        footer_txt = " | ".join(filter(None, [
+            entete.get('cabinet',''), entete.get('adresse',''),
+            entete.get('telephone',''), entete.get('horaires','')]))
+        add_run(pied, footer_txt, size=8, color="9ca3af")
+
+        # ── Sauvegarder en mémoire ─────────────────────────────
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf.getvalue(), None
+
     except Exception as e:
         return None, str(e)
-    finally:
-        for p in [jf_path, out_path]:
-            if os.path.exists(p): os.remove(p)
 
 def save_radio_to_patient(patient_id, img, region, type_radio, notes, is_traited=False):
     """Sauvegarde une image radio dans le dossier du patient"""
@@ -1169,40 +1197,107 @@ def page_ordonnances():
                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True)
 
-                # Bouton impression HTML
-                if "ordo_docx" not in st.session_state:
-                    # Aperçu HTML imprimable
-                    entete=get_entete()
-                    meds_html="".join([f"<tr><td style='padding:8px;border:1px solid #e5e7eb;'><b>{i+1}. {m['nom']}</b></td><td style='padding:8px;border:1px solid #e5e7eb;'>{m['posologie']}</td><td style='padding:8px;border:1px solid #e5e7eb;'>{m['duree']}</td></tr>" for i,m in enumerate(st.session_state.ordo_meds)])
-                    html_ordo=f"""<html><head><meta charset='utf-8'><style>
-                        body{{font-family:Arial,sans-serif;margin:20px;font-size:13px;}}
-                        .header{{display:flex;justify-content:space-between;border-bottom:3px solid #1a3a5c;padding-bottom:10px;margin-bottom:15px;}}
-                        .doc-title{{text-align:center;font-size:16px;font-weight:bold;color:#1a3a5c;margin:15px 0;letter-spacing:2px;}}
-                        table{{width:100%;border-collapse:collapse;margin-top:10px;}}
-                        th{{background:#1a3a5c;color:white;padding:8px;text-align:left;}}
-                        .footer{{margin-top:40px;display:flex;justify-content:space-between;}}
-                        .signature{{text-align:center;border-top:1px solid #333;padding-top:5px;margin-top:60px;width:200px;}}
-                        @media print{{body{{margin:0;}}}}
-                    </style></head><body>
-                    <div class='header'>
-                        <div><b style='font-size:15px;color:#1a3a5c;'>{entete.get('nom_medecin','')}</b><br>{entete.get('specialite','')}<br><i>{entete.get('diplomes','')}</i></div>
-                        <div style='text-align:right;'>{entete.get('cabinet','')}<br>{entete.get('adresse','')}<br>📞 {entete.get('telephone','')}</div>
-                    </div>
-                    <div class='doc-title'>ORDONNANCE MÉDICALE</div>
-                    <div style='display:flex;justify-content:space-between;background:#f3f4f6;padding:10px;border-radius:6px;margin-bottom:15px;'>
-                        <div><b>Patient:</b> {pat.get('prenom','')} {pat.get('nom','')}<br><b>Né(e) le:</b> {pat.get('date_naissance','') or '—'} ({calc_age(pat.get('date_naissance',''))} ans)<br>{'<b style="color:red;">⚠ Allergies: '+pat.get("allergies","")+"</b>" if pat.get("allergies") else ""}</div>
-                        <div style='text-align:right;'><b>Date:</b> {dt.strftime("%d/%m/%Y")}<br><b>Diagnostic:</b> {diag}</div>
-                    </div>
-                    <table><tr><th>Médicament</th><th>Posologie</th><th>Durée</th></tr>{meds_html}</table>
-                    {f"<p style='margin-top:15px;font-style:italic;'><b>Instructions:</b> {inst_gen}</p>" if inst_gen else ""}
-                    <div class='footer'>
-                        <div>{f"<b>Prochain RDV:</b> {prochain}" if prochain else ""}{f"<br><b style='color:red;'>Arrêt de travail:</b> {arret}" if arret else ""}</div>
-                        <div class='signature'>{entete.get('nom_medecin','')}<br><small>Cachet & Signature</small></div>
-                    </div>
-                    <script>window.onload=function(){{window.print();}}</script>
-                    </body></html>"""
-                    b64_html=__import__('base64').b64encode(html_ordo.encode('utf-8')).decode()
-                    st.markdown(f'<a href="data:text/html;base64,{b64_html}" target="_blank"><button style="width:100%;margin-top:0.5rem;padding:0.5rem;background:#059669;color:white;border:none;border-radius:8px;cursor:pointer;font-size:0.9rem;font-weight:600;">🖨️ Aperçu & Impression directe</button></a>', unsafe_allow_html=True)
+                # ── Aperçu HTML + Impression (toujours visible) ──
+                st.markdown("---")
+                entete_h=get_entete()
+                rows_html = []
+                for i,m in enumerate(st.session_state.ordo_meds):
+                    bg = "background:#f8fafc;" if i%2==0 else ""
+                    row = (f"<tr style='{bg}'>"
+                           f"<td style='padding:8px;border:1px solid #e5e7eb;'><b>{i+1}. {m['nom']}</b>"
+                           f"<br><small style='color:#6b7280;'>{m.get('dci','')}</small></td>"
+                           f"<td style='padding:8px;border:1px solid #e5e7eb;'>{m['posologie']}</td>"
+                           f"<td style='padding:8px;border:1px solid #e5e7eb;'>{m['duree']}</td>"
+                           f"<td style='padding:8px;border:1px solid #e5e7eb;color:#92400e;'>{m.get('instructions','')}</td></tr>")
+                    rows_html.append(row)
+                meds_html = "".join(rows_html)
+                allergie_html = ("<div style='color:red;font-weight:bold;'>&#9888; Allergies : " + pat.get('allergies','') + "</div>") if pat.get("allergies") else ""
+                rdv_html = ("<b>Prochain RDV :</b> " + prochain + "<br>") if prochain else ""
+                arret_html = ("<b style='color:red;'>Arr&ecirc;t de travail :</b> " + arret) if arret else ""
+                inst_html = ("<p style='font-style:italic;border-top:1px solid #dbeafe;padding-top:8px;'><b>Instructions :</b> " + inst_gen + "</p>") if inst_gen else "" 
+                html_ordo = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Ordonnance</title>
+<style>
+  body{{font-family:Arial,sans-serif;margin:25px;font-size:13px;color:#111;}}
+  .header{{display:flex;justify-content:space-between;align-items:stretch;margin-bottom:10px;}}
+  .hdr-left{{flex:1;padding-right:20px;}}
+  .hdr-right{{background:#1a3a5c;color:white;padding:12px 18px;border-radius:6px;text-align:center;min-width:200px;}}
+  .hdr-right p{{margin:3px 0;font-size:12px;}}
+  .sep{{border:none;border-top:3px solid #1a3a5c;margin:12px 0;}}
+  .doc-title{{text-align:center;font-size:17px;font-weight:bold;color:#1a3a5c;letter-spacing:2px;margin:14px 0;}}
+  .patient-box{{display:flex;justify-content:space-between;background:#f3f4f6;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;}}
+  table{{width:100%;border-collapse:collapse;margin-top:8px;}}
+  thead tr{{background:#1a3a5c;color:white;}}
+  th{{padding:8px 10px;text-align:left;font-size:12px;}}
+  td{{padding:8px 10px;border:1px solid #e5e7eb;font-size:12px;vertical-align:top;}}
+  tr:nth-child(even) td{{background:#f8fafc;}}
+  .footer{{display:flex;justify-content:space-between;margin-top:40px;font-size:12px;}}
+  .signature{{text-align:center;min-width:220px;}}
+  .sig-line{{border-top:1px solid #374151;margin-top:55px;padding-top:5px;color:#9ca3af;font-size:11px;}}
+  .pied{{text-align:center;border-top:1px solid #dbeafe;margin-top:20px;padding-top:8px;color:#9ca3af;font-size:10px;}}
+  @media print{{
+    body{{margin:10px;}}
+    .no-print{{display:none;}}
+    button{{display:none;}}
+  }}
+</style></head><body>
+<div class="no-print" style="margin-bottom:15px;">
+  <button onclick="window.print()" style="padding:10px 28px;background:#1a3a5c;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:bold;">🖨️ Imprimer</button>
+  <button onclick="window.close()" style="padding:10px 20px;background:#6b7280;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;margin-left:10px;">✕ Fermer</button>
+</div>
+<div class="header">
+  <div class="hdr-left">
+    <div style="font-size:16px;font-weight:bold;color:#1a3a5c;">{entete_h.get("nom_medecin","")}</div>
+    <div style="color:#374151;margin-top:3px;">{entete_h.get("specialite","")}</div>
+    <div style="color:#6b7280;font-style:italic;font-size:11px;">{entete_h.get("diplomes","")}</div>
+  </div>
+  <div class="hdr-right">
+    <div style="font-weight:bold;font-size:13px;">{entete_h.get("cabinet","")}</div>
+    <p>{entete_h.get("adresse","")}</p>
+    <p>📞 {entete_h.get("telephone","")}</p>
+    <p>{entete_h.get("email","")}</p>
+    <p>{entete_h.get("horaires","")}</p>
+  </div>
+</div>
+<hr class="sep">
+<div class="doc-title">ORDONNANCE MÉDICALE</div>
+<div class="patient-box">
+  <div>
+    <b style="font-size:13px;">{pat.get("prenom","")} {pat.get("nom","")}</b><br>
+    Né(e) le : {pat.get("date_naissance","") or "—"} &nbsp;|&nbsp; Âge : {calc_age(pat.get("date_naissance",""))} ans<br>
+    Mutuelle : {pat.get("mutuelle","") or "—"}<br>
+    {allergie_html}
+  </div>
+  <div style="text-align:right;">
+    <b>Date :</b> {dt.strftime("%d/%m/%Y")}<br>
+    <b>Diagnostic :</b> {diag}
+  </div>
+</div>
+<table>
+  <thead><tr><th>Médicament</th><th>Posologie</th><th>Durée</th><th>Instructions</th></tr></thead>
+  <tbody>{meds_html}</tbody>
+</table>
+{inst_html}
+<div class="footer">
+  <div>{rdv_html}{arret_html}</div>
+  <div class="signature">
+    <div style="font-weight:bold;color:#1a3a5c;">{entete_h.get("nom_medecin","")}</div>
+    <div style="color:#6b7280;font-size:11px;">{entete_h.get("specialite","")}</div>
+    <div class="sig-line">Cachet &amp; Signature</div>
+  </div>
+</div>
+<div class="pied">{entete_h.get("cabinet","")} | {entete_h.get("adresse","")} | {entete_h.get("telephone","")} | {entete_h.get("horaires","")}</div>
+</body></html>"""
+                # Aperçu dans la page
+                with st.expander("👁️ Aperçu de l'ordonnance", expanded=False):
+                    st.components.v1.html(html_ordo, height=600, scrolling=True)
+                # Bouton impression dans nouvel onglet
+                b64_html = base64.b64encode(html_ordo.encode("utf-8")).decode()
+                st.markdown(
+                    f'''<a href="data:text/html;base64,{b64_html}" target="_blank">
+                    <button style="width:100%;padding:0.6rem;background:#059669;color:white;
+                    border:none;border-radius:8px;cursor:pointer;font-size:0.95rem;
+                    font-weight:600;margin-top:6px;">🖨️ Ouvrir et Imprimer l'ordonnance</button></a>''',
+                    unsafe_allow_html=True)
             else:
                 st.markdown("<div class='alert-info alert-box'>💡 Ajoutez des médicaments ou choisissez un protocole.</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)

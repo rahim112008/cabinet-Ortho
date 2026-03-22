@@ -2,3 +2,4 @@ streamlit
 Pillow
 numpy
 opencv-python-headless
+python-docx
